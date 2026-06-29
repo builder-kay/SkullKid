@@ -3,7 +3,7 @@ import { signToken } from "@/lib/jwt";
 import { AUTH_COOKIE } from "@/lib/auth";
 import { loginSchema } from "@/lib/validators";
 import { getSupabaseAdminClient, getSupabaseClient, hasSupabaseConfig } from "@/lib/supabase";
-import { isLikelyPhone, normalizeGhanaPhone } from "@/lib/phone";
+import { buildGhanaPhoneCandidates, isLikelyPhone, normalizeGhanaPhone, phoneToLoginEmail } from "@/lib/phone";
 
 export async function POST(request: Request) {
   try {
@@ -22,16 +22,33 @@ export async function POST(request: Request) {
     const admin = getSupabaseAdminClient();
 
     let phone = identifier;
+    let profileUserId: string | null = null;
     if (isLikelyPhone(identifier)) {
       const normalized = normalizeGhanaPhone(identifier);
       if (!normalized) {
         return NextResponse.json({ error: "Enter a valid Ghana mobile number." }, { status: 400 });
       }
       phone = normalized;
+
+      const candidates = buildGhanaPhoneCandidates(phone);
+      for (const candidate of candidates) {
+        const normalizedCandidate = normalizeGhanaPhone(candidate);
+        if (!normalizedCandidate) continue;
+        const { data: profileByPhone } = await admin
+          .from("profiles")
+          .select("id, phone")
+          .eq("phone", normalizedCandidate)
+          .maybeSingle();
+        if (profileByPhone?.phone) {
+          phone = profileByPhone.phone;
+          profileUserId = profileByPhone.id;
+          break;
+        }
+      }
     } else {
       const { data: profile, error } = await admin
         .from("profiles")
-        .select("phone")
+        .select("id, phone")
         .eq("username", identifier.toLowerCase())
         .maybeSingle();
 
@@ -39,15 +56,61 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: "Account not found. Check username or number." }, { status: 404 });
       }
       phone = profile.phone;
+      profileUserId = profile.id;
     }
 
-    const { data: sessionData, error: signInError } = await supabase.auth.signInWithPassword({
-      phone,
+    const loginEmail = phoneToLoginEmail(phone);
+    if (!loginEmail) {
+      return NextResponse.json({ error: "Invalid phone format." }, { status: 400 });
+    }
+
+    if (profileUserId) {
+      const authUser = await admin.auth.admin.getUserById(profileUserId);
+      if (!authUser.error && authUser.data.user && !authUser.data.user.email) {
+        await admin.auth.admin.updateUserById(profileUserId, {
+          email: loginEmail,
+          email_confirm: true,
+        });
+      }
+    }
+
+    let sessionData: { user: { id: string } | null } | null = null;
+    let signInErrorMessage = "Invalid credentials.";
+
+    const byEmail = await supabase.auth.signInWithPassword({
+      email: loginEmail,
       password: parsed.data.password,
     });
+    if (!byEmail.error && byEmail.data.user) {
+      sessionData = { user: { id: byEmail.data.user.id } };
+    } else {
+      signInErrorMessage = byEmail.error?.message ?? signInErrorMessage;
 
-    if (signInError || !sessionData.user) {
-      return NextResponse.json({ error: "Invalid credentials." }, { status: 401 });
+      // Fallback for older accounts created with phone-only credentials.
+      const phoneCandidates = buildGhanaPhoneCandidates(phone);
+      const attempts = phoneCandidates.length > 0 ? phoneCandidates : [phone];
+      for (const candidate of attempts) {
+        const result = await supabase.auth.signInWithPassword({
+          phone: candidate,
+          password: parsed.data.password,
+        });
+
+        if (!result.error && result.data.user) {
+          sessionData = { user: { id: result.data.user.id } };
+          break;
+        }
+
+        signInErrorMessage = result.error?.message ?? signInErrorMessage;
+      }
+    }
+
+    if (!sessionData?.user) {
+      const safeMessage =
+        signInErrorMessage.toLowerCase().includes("invalid login credentials") ||
+        signInErrorMessage.toLowerCase().includes("invalid credentials")
+          ? "Invalid credentials."
+          : "Could not sign in. Please verify number/username and password.";
+      return NextResponse.json({ error: safeMessage }, { status: 401 });
     }
 
     const { data: profile, error: profileError } = await admin

@@ -12,6 +12,7 @@ export const registerSchema = z.object({
 export const signupOtpVerifySchema = z.object({
   phone: z.string().min(9),
   otp: z.string().length(6, "OTP should be 6 digits."),
+  sessionToken: z.string().min(10).optional(),
 });
 
 export const loginSchema = z.object({
@@ -28,6 +29,7 @@ export const passwordResetConfirmSchema = z.object({
   otp: z.string().length(6),
   newPassword: z.string().min(8),
   confirmPassword: z.string().min(8),
+  sessionToken: z.string().min(10).optional(),
 });
 
 export const quizAttemptSchema = z.object({

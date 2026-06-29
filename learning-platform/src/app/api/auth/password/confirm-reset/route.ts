@@ -1,8 +1,10 @@
 import { NextResponse } from "next/server";
-import { clearOtp, verifyOtp } from "@/lib/otp-store";
+import { clearOtpSession, getOtpSession } from "@/lib/otp-store";
 import { normalizeGhanaPhone } from "@/lib/phone";
 import { passwordResetConfirmSchema } from "@/lib/validators";
 import { getSupabaseAdminClient, hasSupabaseConfig } from "@/lib/supabase";
+import { verifyOtpSms } from "@/lib/sms";
+import { verifyFlowToken } from "@/lib/flow-token";
 
 export async function POST(request: Request) {
   try {
@@ -25,13 +27,33 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Enter a valid Ghana mobile number." }, { status: 400 });
     }
 
-    const verification = verifyOtp({ phone, purpose: "reset", code: parsed.data.otp });
-    if (!verification.ok || !verification.payload?.userId) {
-      return NextResponse.json({ error: verification.reason }, { status: 400 });
+    const otpVerification = await verifyOtpSms({ phone, otpCode: parsed.data.otp });
+    if (!otpVerification.ok) {
+      return NextResponse.json({ error: otpVerification.reason }, { status: 400 });
+    }
+
+    const tokenPayload = parsed.data.sessionToken
+      ? verifyFlowToken<{
+          purpose: "reset";
+          phone: string;
+          userId: string;
+        }>(parsed.data.sessionToken)
+      : null;
+
+    const memorySession = getOtpSession({ phone, purpose: "reset" });
+    const userId =
+      tokenPayload && tokenPayload.purpose === "reset" && tokenPayload.phone === phone
+        ? tokenPayload.userId
+        : memorySession.ok
+          ? memorySession.payload?.userId
+          : null;
+
+    if (!userId) {
+      return NextResponse.json({ error: "Reset session expired. Request OTP again." }, { status: 400 });
     }
 
     const admin = getSupabaseAdminClient();
-    const { error } = await admin.auth.admin.updateUserById(verification.payload.userId, {
+    const { error } = await admin.auth.admin.updateUserById(userId, {
       password: parsed.data.newPassword,
     });
 
@@ -39,7 +61,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Unable to reset password right now." }, { status: 500 });
     }
 
-    clearOtp(phone, "reset");
+    clearOtpSession(phone, "reset");
     return NextResponse.json({ message: "Password reset successful. You can now sign in." });
   } catch {
     return NextResponse.json({ error: "Could not reset password right now." }, { status: 500 });

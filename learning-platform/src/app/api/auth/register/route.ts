@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { registerSchema } from "@/lib/validators";
 import { normalizeGhanaPhone } from "@/lib/phone";
 import { getSupabaseAdminClient, hasSupabaseConfig } from "@/lib/supabase";
-import { issueOtp } from "@/lib/otp-store";
+import { saveOtpSession } from "@/lib/otp-store";
 import { sendOtpSms } from "@/lib/sms";
 
 export async function POST(request: Request) {
@@ -48,7 +48,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Username is already taken. Choose another username." }, { status: 409 });
     }
 
-    const otp = issueOtp({
+    saveOtpSession({
       phone,
       purpose: "signup",
       payload: {
@@ -58,7 +58,7 @@ export async function POST(request: Request) {
         password: parsed.data.password,
       },
     });
-    await sendOtpSms({ phone, otp, context: "signup" });
+    await sendOtpSms({ phone, context: "signup" });
 
     return NextResponse.json({ message: "OTP sent to your phone number." }, { status: 200 });
   } catch {

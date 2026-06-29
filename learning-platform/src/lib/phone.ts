@@ -19,3 +19,20 @@ export function normalizeGhanaPhone(raw: string) {
 export function isLikelyPhone(input: string) {
   return /^\+?\d[\d\s-]{7,}$/.test(input.trim());
 }
+
+export function buildGhanaPhoneCandidates(raw: string) {
+  const normalized = normalizeGhanaPhone(raw);
+  if (!normalized) return [];
+
+  const digitsOnly = normalized.replace("+", "");
+  const local = digitsOnly.startsWith("233") && digitsOnly.length === 12 ? `0${digitsOnly.slice(3)}` : normalized;
+
+  return Array.from(new Set([normalized, digitsOnly, local]));
+}
+
+export function phoneToLoginEmail(raw: string) {
+  const normalized = normalizeGhanaPhone(raw);
+  if (!normalized) return null;
+  const digits = normalized.replace(/\D/g, "");
+  return `u${digits}@afralearn.local`;
+}

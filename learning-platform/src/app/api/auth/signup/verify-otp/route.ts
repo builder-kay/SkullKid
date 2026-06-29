@@ -2,9 +2,11 @@ import { NextResponse } from "next/server";
 import { AUTH_COOKIE } from "@/lib/auth";
 import { signToken } from "@/lib/jwt";
 import { signupOtpVerifySchema } from "@/lib/validators";
-import { clearOtp, verifyOtp } from "@/lib/otp-store";
+import { clearOtpSession, getOtpSession } from "@/lib/otp-store";
 import { getSupabaseAdminClient, hasSupabaseConfig } from "@/lib/supabase";
-import { normalizeGhanaPhone } from "@/lib/phone";
+import { normalizeGhanaPhone, phoneToLoginEmail } from "@/lib/phone";
+import { verifyOtpSms } from "@/lib/sms";
+import { verifyFlowToken } from "@/lib/flow-token";
 
 export async function POST(request: Request) {
   try {
@@ -23,21 +25,51 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Enter a valid Ghana mobile number." }, { status: 400 });
     }
 
-    const verification = verifyOtp({ phone, purpose: "signup", code: parsed.data.otp });
-    if (!verification.ok || !verification.payload) {
-      return NextResponse.json({ error: verification.reason }, { status: 400 });
+    const otpVerification = await verifyOtpSms({ phone, otpCode: parsed.data.otp });
+    if (!otpVerification.ok) {
+      return NextResponse.json({ error: otpVerification.reason }, { status: 400 });
     }
 
-    const { fullName, username, role, password } = verification.payload;
+    const tokenPayload = parsed.data.sessionToken
+      ? verifyFlowToken<{
+          purpose: "signup";
+          phone: string;
+          fullName: string;
+          username: string;
+          role: string;
+          password: string;
+        }>(parsed.data.sessionToken)
+      : null;
+
+    const memorySession = getOtpSession({ phone, purpose: "signup" });
+    const payload =
+      tokenPayload && tokenPayload.purpose === "signup" && tokenPayload.phone === phone
+        ? tokenPayload
+        : memorySession.ok
+          ? memorySession.payload
+          : null;
+
+    if (!payload) {
+      return NextResponse.json({ error: "Signup session expired. Request OTP again." }, { status: 400 });
+    }
+
+    const { fullName, username, role, password } = payload;
     if (!fullName || !username || !role || !password) {
       return NextResponse.json({ error: "Signup session expired. Request OTP again." }, { status: 400 });
     }
 
     const admin = getSupabaseAdminClient();
+    const loginEmail = phoneToLoginEmail(phone);
+    if (!loginEmail) {
+      return NextResponse.json({ error: "Could not prepare account credentials." }, { status: 400 });
+    }
+
     const { data: created, error: createError } = await admin.auth.admin.createUser({
+      email: loginEmail,
+      email_confirm: true,
       phone,
-      password,
       phone_confirm: true,
+      password,
       user_metadata: {
         full_name: fullName,
         username,
@@ -62,7 +94,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Could not create user profile." }, { status: 500 });
     }
 
-    clearOtp(phone, "signup");
+    clearOtpSession(phone, "signup");
     const roleUpper = String(role).toUpperCase() as "STUDENT" | "TEACHER" | "ADMIN";
     const token = signToken({ userId: created.user.id, role: roleUpper, email: phone });
 

@@ -2,8 +2,9 @@ import { NextResponse } from "next/server";
 import { normalizeGhanaPhone } from "@/lib/phone";
 import { passwordResetRequestSchema } from "@/lib/validators";
 import { getSupabaseAdminClient, hasSupabaseConfig } from "@/lib/supabase";
-import { issueOtp } from "@/lib/otp-store";
+import { saveOtpSession } from "@/lib/otp-store";
 import { sendOtpSms } from "@/lib/sms";
+import { signFlowToken } from "@/lib/flow-token";
 
 export async function POST(request: Request) {
   try {
@@ -23,20 +24,37 @@ export async function POST(request: Request) {
     }
 
     const admin = getSupabaseAdminClient();
-    const { data: profile } = await admin.from("profiles").select("id").eq("phone", phone).maybeSingle();
+    const { data: profile, error: profileError } = await admin
+      .from("profiles")
+      .select("id")
+      .eq("phone", phone)
+      .maybeSingle();
+    if (profileError) {
+      return NextResponse.json({ error: `Database check failed: ${profileError.message}` }, { status: 500 });
+    }
     if (!profile?.id) {
       return NextResponse.json({ error: "No account found with this number." }, { status: 404 });
     }
 
-    const otp = issueOtp({
+    saveOtpSession({
       phone,
       purpose: "reset",
       payload: { userId: profile.id },
     });
-    await sendOtpSms({ phone, otp, context: "reset" });
+    await sendOtpSms({ phone, context: "reset" });
 
-    return NextResponse.json({ message: "Reset OTP sent successfully." });
-  } catch {
-    return NextResponse.json({ error: "Could not request reset right now." }, { status: 500 });
+    const sessionToken = signFlowToken(
+      {
+        purpose: "reset",
+        phone,
+        userId: profile.id,
+      },
+      10,
+    );
+
+    return NextResponse.json({ message: "Reset OTP sent successfully.", sessionToken });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Could not request reset right now.";
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyToken } from "@/lib/jwt";
 
-const protectedPaths = ["/student", "/teacher", "/admin"];
+const protectedPaths = ["/home", "/student", "/teacher", "/admin"];
 
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
@@ -16,6 +16,9 @@ export function middleware(request: NextRequest) {
 
   try {
     const session = verifyToken(token);
+    if (pathname.startsWith("/home")) {
+      return NextResponse.next();
+    }
     const rolePath = `/${session.role.toLowerCase()}`;
     if (!pathname.startsWith(rolePath)) {
       return NextResponse.redirect(new URL(rolePath + "/dashboard", request.url));
@@ -27,5 +30,5 @@ export function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/student/:path*", "/teacher/:path*", "/admin/:path*"],
+  matcher: ["/home/:path*", "/student/:path*", "/teacher/:path*", "/admin/:path*"],
 };
