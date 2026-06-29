@@ -4,13 +4,6 @@ import { verifyToken } from "@/lib/jwt";
 const protectedPaths = ["/student", "/teacher", "/admin"];
 
 export function middleware(request: NextRequest) {
-  // Temporary bypass for demo navigation in development.
-  const bypassAuth =
-    process.env.NODE_ENV !== "production" && process.env.NEXT_PUBLIC_BYPASS_AUTH !== "false";
-  if (bypassAuth) {
-    return NextResponse.next();
-  }
-
   const { pathname } = request.nextUrl;
   const isProtected = protectedPaths.some((path) => pathname.startsWith(path));
 
