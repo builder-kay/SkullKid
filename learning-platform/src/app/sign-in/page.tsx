@@ -15,7 +15,7 @@ export default function SignInPage() {
   );
 
   const [identifier, setIdentifier] = useState("");
-  const [password, setPassword] = useState("Password123!");
+  const [password, setPassword] = useState("");
   const [fullName, setFullName] = useState("");
   const [username, setUsername] = useState("");
   const [phone, setPhone] = useState("");
